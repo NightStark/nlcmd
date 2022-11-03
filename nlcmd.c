@@ -20,7 +20,7 @@ enum command_identify_by {
     CIB_WDEV,
 };
 
-struct nl80211_state {
+struct nl_info {
     struct nl_sock *nl_sock;
     int nl80211_id;
 };
@@ -57,11 +57,11 @@ static int nlCallback(struct nl_msg* msg, void* arg)
 {
     struct nlmsghdr* ret_hdr = nlmsg_hdr(msg);
     struct nlattr *tb_msg[NL80211_ATTR_MAX + 1];
-    struct nl80211_state *state = (struct nl80211_state *)arg;
+    struct nl_info *nli = (struct nl_info *)arg;
 
     printf("Got NL CALL BACK.\n");
 
-    if (ret_hdr->nlmsg_type != state->nl80211_id) {
+    if (ret_hdr->nlmsg_type != nli->nl80211_id) {
         printf("invalid nlmsg id");
         return NL_STOP;
     }
@@ -116,26 +116,26 @@ static int phy_lookup(const char *name)
     return atoi(buf);
 }
 
-static int nl80211_init(struct nl80211_state *state)
+static int nl80211_init(struct nl_info *nli)
 {
     int err;
 
-    state->nl_sock = nl_socket_alloc();
-    if (!state->nl_sock) {
+    nli->nl_sock = nl_socket_alloc();
+    if (!nli->nl_sock) {
         fprintf(stderr, "Failed to allocate netlink socket.\n");
         return -ENOMEM;
     }
 
-    nl_socket_set_buffer_size(state->nl_sock, 8192, 8192);
+    nl_socket_set_buffer_size(nli->nl_sock, 8192, 8192);
 
-    if (genl_connect(state->nl_sock)) {
+    if (genl_connect(nli->nl_sock)) {
         fprintf(stderr, "Failed to connect to generic netlink.\n");
         err = -ENOLINK;
         goto out_handle_destroy;
     }
 
-    state->nl80211_id = genl_ctrl_resolve(state->nl_sock, "nl80211");
-    if (state->nl80211_id < 0) {
+    nli->nl80211_id = genl_ctrl_resolve(nli->nl_sock, "nl80211");
+    if (nli->nl80211_id < 0) {
         fprintf(stderr, "nl80211 not found.\n");
         err = -ENOENT;
         goto out_handle_destroy;
@@ -144,13 +144,13 @@ static int nl80211_init(struct nl80211_state *state)
     return 0;
 
 out_handle_destroy:
-    nl_socket_free(state->nl_sock);
+    nl_socket_free(nli->nl_sock);
     return err;
 }
 
-static void nl80211_cleanup(struct nl80211_state *state)
+static void nl80211_cleanup(struct nl_info *nli)
 {
-    nl_socket_free(state->nl_sock);
+    nl_socket_free(nli->nl_sock);
 }
 
 static int error_handler(struct sockaddr_nl *nla, struct nlmsgerr *err,
@@ -175,7 +175,7 @@ static int ack_handler(struct nl_msg *msg, void *arg)
     return NL_STOP;
 }
 
-int run_nl80211(struct nl80211_state *state, enum command_identify_by idby, const char *name)
+int run_nl80211(struct nl_info *nli, enum command_identify_by idby, const char *name)
 {
     int err = -1;
     int devidx = -1;
@@ -197,7 +197,7 @@ int run_nl80211(struct nl80211_state *state, enum command_identify_by idby, cons
         goto out_free_msg;
     }
 
-    genlmsg_put(msg, 0, 0, state->nl80211_id, 0, 0, NL80211_CMD_GET_WIPHY, 0);
+    genlmsg_put(msg, 0, 0, nli->nl80211_id, 0, 0, NL80211_CMD_GET_WIPHY, 0);
 
     switch (idby) {
         case CIB_PHY:
@@ -212,10 +212,10 @@ int run_nl80211(struct nl80211_state *state, enum command_identify_by idby, cons
             break;
     }
 
-    nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, nlCallback, state);
-    nl_socket_set_cb(state->nl_sock, s_cb);
+    nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, nlCallback, nli);
+    nl_socket_set_cb(nli->nl_sock, s_cb);
 
-    err = nl_send_auto_complete(state->nl_sock, msg);
+    err = nl_send_auto_complete(nli->nl_sock, msg);
     if (err < 0) {
         fprintf(stderr, "failed to nl_send_auto_complete\n");
         goto out;
@@ -228,7 +228,7 @@ int run_nl80211(struct nl80211_state *state, enum command_identify_by idby, cons
     nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, ack_handler, &err);
 
     while (err > 0)
-        nl_recvmsgs(state->nl_sock, cb);
+        nl_recvmsgs(nli->nl_sock, cb);
 
 out:
     nl_cb_put(cb);
@@ -243,15 +243,15 @@ nla_put_failure:
 int got_wiphy(enum command_identify_by idby, const char *name)
 {
     int err = -1;
-    struct nl80211_state nlstate = {0};
+    struct nl_info nli = {0};
 
-    err = nl80211_init(&nlstate);
+    err = nl80211_init(&nli);
     if (err)
         return -1;
 
-    err = run_nl80211(&nlstate, idby, name);
+    err = run_nl80211(&nli, idby, name);
 
-    nl80211_cleanup(&nlstate);
+    nl80211_cleanup(&nli);
 
     return err;
 }
